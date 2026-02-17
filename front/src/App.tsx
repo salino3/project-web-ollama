@@ -1,10 +1,11 @@
-import { HelloWorldComponent } from './pods/hello-world/hello-world.component';
+import { AppRouter } from './router/router.component';
+import './App.scss'; 
 
 function App() {
   return (
-    <>
-      <HelloWorldComponent />
-    </>
+   
+      <AppRouter />
+    
   )
 }
 
