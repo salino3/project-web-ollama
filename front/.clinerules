@@ -1,3 +1,10 @@
+# SECURITY & SCOPE RULES
+
+- You are strictly FORBIDDEN from creating, modifying, or deleting any file or folder outside the current project root directory.
+- Do not execute any terminal command that targets paths outside of: ${current_working_directory}
+- If a task requires accessing external files, you must stop and ask for explicit confirmation, for reading, because other actions (creating, modifying, deleting) are not possible, explaining why it's necessary.
+- Never use absolute paths (e.g., C:\Users\...); always use relative paths starting from the project root.
+
 # Project Standards: React + Vite + TS + SCSS (Pods Architecture)
 
 ## Technical Stack
