@@ -1,0 +1,63 @@
+# SECURITY & SCOPE RULES
+
+- You are strictly FORBIDDEN from creating, modifying, or deleting any file or folder outside the current project root directory.
+- Do not execute any terminal command that targets paths outside of the project root.
+- If a task requires accessing external files, you must stop and ask for explicit confirmation for READING ONLY and explaining why it's necessary. Other actions are impossible.
+- Never use absolute paths; always use relative paths starting from the project root.
+
+# PROJECT STRUCTURE (Fullstack)
+
+The project is divided into two main folders: `/front` and `/back`.
+
+# FRONTEND ARCHITECTURE (React 18 + Vite)
+## Tech Stack
+- **Framework**: React 18 + Vite (TypeScript)
+- **Styling**: SCSS (Modules or Global)
+- **Routing**: React Router Dom
+- **State**: Context API or Zustand (as needed)
+## Directory Structure (`/front/src`)
+- `pods`: Business logic modules (Page-level components).
+  - Structure: `[pod-name]/[pod-name].component.tsx`, `[pod-name].styles.scss`
+- `common`: Reusable generic UI components (Buttons, Inputs).
+- `common-app`: App-specific reusable components (Headers, Footers).
+- `layouts`: Page layouts (e.g., CenteredLayout, DashboardLayout).
+- `router`: Routing configuration (`router.component.tsx`).
+- `hooks`: Custom React hooks.
+- `store`: Global state management.
+## CODING PATTERNS
+1. **Router**:
+   - Create `src/router/router.component.tsx` exporting `AppRouter`.
+   - Use `AppRouter` in `App.tsx`.
+   - Wrap `App` with `BrowserRouter` in `main.tsx`.
+2. **Styles**:
+   - Use SCSS.
+   - Import specific styles in their respective components.
+   - `main.scss` for global resets, `App.scss` for app-level styles.
+2. The AI Prompt
+When you start a new project with me (or another agent), paste this prompt to get everything set up instantly:
+
+"Hi! note that I have a .clinerules file. Please initialize the frontend project in the /front folder using Vite + React 18 + TypeScript.
+
+Install dependencies: react-router-dom and sass (dev).
+Create the folder structure defined in .clinerules (pods, common, router, etc.).
+Implement the Router Architecture:
+Create src/router/router.component.tsx with a default route.
+Configure main.tsx with <BrowserRouter> and App.tsx with the Router component.
+Convert default CSS to SCSS.
+Create a specific 'hello-world' pod to verify the structure.
+Configure Vite to run on port 4800."
+3. Router Scheme
+This is the standard pattern for your src/router/router.component.tsx:
+
+import React from 'react';
+import { Routes, Route } from 'react-router-dom';
+import { LoginScene } from '../pods/login/login.component';
+import { DashboardScene } from '../pods/dashboard/dashboard.component';
+export const AppRouter: React.FC = () => {
+  return (
+    <Routes>
+      <Route path="/" element={<LoginScene />} />
+      <Route path="/dashboard" element={<DashboardScene />} />
+    </Routes>
+  );
+};
