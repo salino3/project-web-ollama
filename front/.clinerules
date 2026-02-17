@@ -1,0 +1,39 @@
+# Project Standards: React + Vite + TS + SCSS (Pods Architecture)
+
+## Technical Stack
+
+- React 18+ (Vite)
+- TypeScript
+- SCSS (Individual files per component)
+- React Router Dom
+
+## Directory Structure Rules
+
+You must strictly follow this folder structure inside `/src`:
+
+- `/common`: Shared UI components (buttons, inputs, etc.)
+- `/common-app`: App-specific shared logic/components.
+- `/router`: Routing configuration and constant paths.
+- `/layouts`: Wrapper components for different page views.
+- `/hooks`: Custom global React hooks.
+- `/store`: State management (Providers/Context).
+- `/pods`: Business logic modules. Each pod represents a feature or a main view.
+
+## Component Pattern (STRICT)
+
+Every time you create a component inside a Pod, use this pattern:
+
+1. Create a folder: `/src/pods/[pod-name]/`
+2. Component file: `[pod-name].component.tsx`
+3. Styles file: `[pod-name].styles.scss` (Must be imported inside the .tsx file)
+
+Example for 'home-page':
+
+- src/pods/home-page/home-page.component.tsx
+- src/pods/home-page/home-page.styles.scss
+
+## Coding Rules
+
+- Use Functional Components with TypeScript interfaces.
+- Use SCSS modules or standard SCSS with specific class names to avoid collisions.
+- All code comments and documentation must be in English.
