@@ -14,9 +14,23 @@ IF NOT EXISTS CREATE TABLE suppliers (
     catalog_url TEXT -- Used later with MCP Fetch
 );
 
--- Seed data for testing
--- INSERT INTO products (name, current_stock, cost_price, min_required) 
--- VALUES ('Ultrasonic Sensor', 2, 5.50, 10);
+-- 3. Sales Table (The "Intelligence" Table)
+IF NOT EXISTS CREATE TABLE sales (
+    id SERIAL PRIMARY KEY,
+    product_id INTEGER REFERENCES products(id),
+    quantity INTEGER NOT NULL,
+    sale_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    sale_price DECIMAL(10, 2) NOT NULL
+);
 
--- INSERT INTO suppliers (name, catalog_url) 
--- VALUES ('TechSupply', 'https://example.com/sensors');
+-- 
+
+-- Seed data for testing
+INSERT INTO products (name, current_stock, cost_price, min_required) 
+VALUES ('Ultrasonic Sensor', 2, 5.50, 10);
+
+INSERT INTO suppliers (name, catalog_url) 
+VALUES ('TechSupply', 'https://example.com/sensors');
+
+INSERT INTO sales (product_id, quantity, sale_price) 
+VALUES (1, 5, 12.00); -- Sold 5 units  
