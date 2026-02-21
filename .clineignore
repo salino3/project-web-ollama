@@ -1,2 +1,8 @@
 back/.env
 front/.env
+
+front/node_modules
+back/node_modules
+
+front/dist
+back/build
