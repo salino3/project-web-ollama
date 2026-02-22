@@ -1,10 +1,12 @@
 import express from "express";
 import cors from "cors";
+import dotenv from "dotenv";
 import { ProductService } from "./services/product.service.js";
 import { McpService } from "./services/mcp.service.js";
 import { SupplierRepository } from "./repositories/supplier.repository.js";
 
 const app = express();
+dotenv.config();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors());
@@ -84,12 +86,9 @@ app.get("/api/mcp/fetch-catalog/:supplierId", async (req, res) => {
     );
     res.json(catalog);
   } catch (error) {
-    res
-      .status(500)
-      .json({
-        error:
-          error instanceof Error ? error.message : "Failed to fetch catalog",
-      });
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Failed to fetch catalog",
+    });
   }
 });
 
