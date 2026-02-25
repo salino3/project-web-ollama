@@ -1,6 +1,6 @@
 # Inventory Reorder Report
 
-**Generated:** 2026-02-25T13:36:14.041Z
+**Generated:** 2026-02-25T14:21:28.770Z
 **Summary:** Inventory analysis completed successfully.
 
 ## Low Stock Products (3)
@@ -10,12 +10,13 @@
 - **Minimum Required:** 20
 - **Stock Level:** 15.0%
 - **Need to Order:** 17 units
-- **Estimated Cost:** $25.50
+- **Product Cost:** $1.50 for units
+- **Estimated Total Cost:** $25.50
 
 **Catalog Information:**
 - **Supplier:** Global Electronics
 - **Catalog URL:** https://api.github.com/repos/node-fetch/node-fetch
-- **Fetched:** 2026-02-25T13:36:13.912Z
+- **Fetched:** 2026-02-25T14:21:28.632Z
 - **Data Available:** Yes (JSON object)
 
 **Recommendation:** 
@@ -30,12 +31,13 @@
 - **Minimum Required:** 10
 - **Stock Level:** 20.0%
 - **Need to Order:** 8 units
-- **Estimated Cost:** $44.00
+- **Product Cost:** $5.50 for units
+- **Estimated Total Cost:** $44.00
 
 **Catalog Information:**
 - **Supplier:** Global Electronics
 - **Catalog URL:** https://api.github.com/repos/node-fetch/node-fetch
-- **Fetched:** 2026-02-25T13:36:13.978Z
+- **Fetched:** 2026-02-25T14:21:28.697Z
 - **Data Available:** Yes (JSON object)
 
 **Recommendation:** 
@@ -50,12 +52,13 @@
 - **Minimum Required:** 10
 - **Stock Level:** 20.0%
 - **Need to Order:** 8 units
-- **Estimated Cost:** $44.00
+- **Product Cost:** $5.50 for units
+- **Estimated Total Cost:** $44.00
 
 **Catalog Information:**
 - **Supplier:** Global Electronics
 - **Catalog URL:** https://api.github.com/repos/node-fetch/node-fetch
-- **Fetched:** 2026-02-25T13:36:14.041Z
+- **Fetched:** 2026-02-25T14:21:28.769Z
 - **Data Available:** Yes (JSON object)
 
 **Recommendation:** 

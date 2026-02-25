@@ -229,6 +229,7 @@ class InventoryAnalyzer {
 - **Minimum Required:** ${product.min_required}
 - **Stock Level:** ${stockRatio}%
 - **Need to Order:** ${needed} units
+- **Product Cost:** $${product.cost_price} for units
 - **Estimated Total Cost:** $${(needed * product.cost_price).toFixed(2)}
 
 `;
