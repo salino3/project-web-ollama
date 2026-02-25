@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import { ProductService } from "./services/product.service.js";
 import { McpService } from "./services/mcp.service.js";
 import { SupplierRepository } from "./repositories/supplier.repository.js";
+import { SaleService } from "./services/sale.service.js";
 
 const app = express();
 dotenv.config();
@@ -15,6 +16,7 @@ app.use(express.json());
 const productService = new ProductService();
 const mcpService = new McpService();
 const supplierRepository = new SupplierRepository();
+const saleService = new SaleService();
 
 // Product Routes
 app.get("/api/products", async (req, res) => {
@@ -89,6 +91,27 @@ app.get("/api/mcp/fetch-catalog/:supplierId", async (req, res) => {
     res.status(500).json({
       error: error instanceof Error ? error.message : "Failed to fetch catalog",
     });
+  }
+});
+
+// Sales Routes
+app.post("/api/sales", async (req, res) => {
+  try {
+    const result = await saleService.createSaleWithTransaction(req.body);
+    res.status(201).json(result);
+  } catch (error) {
+    if (error instanceof Error) {
+      if (
+        error.message.includes("Insufficient stock") ||
+        error.message.includes("Product not found")
+      ) {
+        res.status(400).json({ error: error.message });
+      } else {
+        res.status(500).json({ error: "Failed to create sale" });
+      }
+    } else {
+      res.status(500).json({ error: "Failed to create sale" });
+    }
   }
 });
 
