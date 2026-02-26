@@ -2,7 +2,16 @@ import { query } from "../database/connection.js";
 import axios from "axios";
 import fs from "fs/promises";
 import path from "path";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import dotenv from "dotenv";
 //  npx tsx src/scripts/analyze_inventory.ts
+
+// Load environment variables
+dotenv.config();
+
+// AI Configuration
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+const aiModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
 interface Product {
   id: number;
@@ -22,20 +31,77 @@ interface LowStockProduct extends Product {
   suppliers: Supplier[];
   catalog_data?: any;
   catalog_error?: string;
+  ai_updated_price?: number;
+  ai_advice?: string; // New: Expert tips
+  ai_source?: string; // New: Where the price came from
 }
-
-interface CatalogResponse {
-  supplier: string;
-  url: string;
-  data: any;
-  timestamp: string;
-}
-
 class InventoryAnalyzer {
   private outputFile: string;
 
   constructor() {
     this.outputFile = path.join(process.cwd(), "REORDER_REPORT.md");
+  }
+
+  private sleep = (ms: number) =>
+    new Promise((resolve) => setTimeout(resolve, ms));
+
+  private async getPriceWithAI(
+    productName: string,
+    catalogData: any,
+  ): Promise<{ price: number | null; advice: string; source: string }> {
+    try {
+      await this.sleep(2000);
+
+      const modelWithSearch = genAI.getGenerativeModel({
+        model: "gemini-2.0-flash",
+      });
+
+      const contextSnippet =
+        typeof catalogData === "string"
+          ? catalogData.substring(0, 500)
+          : JSON.stringify(catalogData).substring(0, 500);
+
+      const prompt = `
+        TASK: Research 2026 price and tech tip for: "${productName}".
+        CONTEXT: ${contextSnippet}
+        
+        OUTPUT FORMAT:
+        You must include a JSON object in your response with this exact structure:
+        {
+          "price": number,
+          "source": "online_search",
+          "advice": "string"
+        }
+      `;
+
+      const result = await modelWithSearch.generateContent({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        tools: [{ googleSearchRetrieval: {} } as any],
+      });
+
+      const responseText = result.response.text();
+
+      const jsonRegex = /\{[\s\S]*\}/;
+      const match = responseText.match(jsonRegex);
+
+      if (match) {
+        const parsed = JSON.parse(match[0].trim());
+        return {
+          price: typeof parsed.price === "number" ? parsed.price : null,
+          advice: parsed.advice || "No specific advice.",
+          source: parsed.source || "ai_search",
+        };
+      }
+
+      throw new Error("No JSON found in AI response");
+    } catch (e: any) {
+      console.error("AI logic failed:", e.message);
+      return {
+        price: null,
+        advice: "Manual review needed due to API limits or format error.",
+        source: "error_fallback",
+      };
+    }
   }
 
   async analyzeInventory(): Promise<void> {
@@ -132,53 +198,55 @@ class InventoryAnalyzer {
     const results: LowStockProduct[] = [];
 
     for (const product of products) {
-      const productWithCatalog: LowStockProduct = {
-        ...product,
-        catalog_data: undefined,
-        catalog_error: undefined,
-      };
+      let productWithCatalog: LowStockProduct = { ...product };
+      let foundPrice = false;
 
-      // Try to fetch catalog data from each supplier
       for (const supplier of product.suppliers) {
-        if (supplier.catalog_url) {
-          try {
-            console.log(
-              `🌐 Fetching catalog for ${product.name} from ${supplier.name}...`,
-            );
+        try {
+          console.log(`🌐 Fetching ${product.name} from ${supplier.name}...`);
+          const response = await axios.get(supplier.catalog_url, {
+            timeout: 10000,
+          });
 
-            const response = await axios.get(supplier.catalog_url, {
-              timeout: 10000,
-              headers: {
-                "User-Agent": "Inventory-Analyzer/1.0",
-              },
-            });
+          const isUselessLink = supplier.catalog_url.includes("github.com");
 
+          const aiResult = await this.getPriceWithAI(
+            product.name,
+            isUselessLink ? "CATALOG_UNAVAILABLE_USE_SEARCH" : response.data,
+          );
+
+          productWithCatalog.ai_advice = aiResult.advice;
+          productWithCatalog.ai_source = aiResult.source;
+
+          if (aiResult.price !== null) {
+            productWithCatalog.ai_updated_price = aiResult.price;
             productWithCatalog.catalog_data = {
               supplier: supplier.name,
               url: supplier.catalog_url,
-              data: response.data,
-              timestamp: new Date().toISOString(),
             };
-
-            console.log(
-              `✅ Successfully fetched catalog for ${product.name} from ${supplier.name}`,
-            );
-            break; // Stop after first successful fetch
-          } catch (error) {
-            const errorMessage =
-              error instanceof Error ? error.message : "Unknown error";
-            productWithCatalog.catalog_error = `Failed to fetch from ${supplier.name}: ${errorMessage}`;
-            console.warn(
-              `❌ Failed to fetch catalog for ${product.name} from ${supplier.name}:`,
-              errorMessage,
-            );
+            foundPrice = true;
+            break; // We found a real price, stop looking
           }
+        } catch (error) {
+          productWithCatalog.catalog_error = "Catalog unreachable";
         }
+      }
+
+      // --- THE FIX: If no price was found in any catalog, get MARKET ADVICE ---
+      if (!foundPrice) {
+        console.log(`🤖 Using Market Knowledge for ${product.name}...`);
+        const marketKnowledge = await this.getPriceWithAI(
+          product.name,
+          "USE_MARKET_KNOWLEDGE_ONLY",
+        );
+        productWithCatalog.ai_advice = marketKnowledge.advice;
+        productWithCatalog.ai_source = "market_average";
+        productWithCatalog.ai_updated_price =
+          marketKnowledge.price ?? undefined;
       }
 
       results.push(productWithCatalog);
     }
-
     return results;
   }
 
@@ -200,9 +268,9 @@ class InventoryAnalyzer {
     products: LowStockProduct[],
     summary: string,
   ): string {
-    const timestamp = new Date().toISOString();
+    const timestamp = new Date().toLocaleString(); // Using local string for better readability
 
-    let content = `# Inventory Reorder Report
+    let content = `# 🤖 Smart Inventory Reorder Report
 
 **Generated:** ${timestamp}
 **Summary:** ${summary}
@@ -218,18 +286,47 @@ class InventoryAnalyzer {
     content += `## Low Stock Products (${products.length})\n\n`;
 
     products.forEach((product, index) => {
+      const dbPrice = Number(product.cost_price);
+      const aiPrice = product.ai_updated_price
+        ? Number(product.ai_updated_price)
+        : null;
+
+      // Logic: Use AI price if available, otherwise use Database price
+      const currentPrice = aiPrice || dbPrice;
+      const needed = product.min_required - product.current_stock;
+      const totalCost = needed * currentPrice;
+
+      // Logic for the Savings/Warning badge
+      let savingsMarkdown = "";
+      if (aiPrice) {
+        if (aiPrice < dbPrice) {
+          const totalSaving = (dbPrice - aiPrice) * needed;
+          savingsMarkdown = `\n> 💰 **Saving Opportunity:** AI found a lower price! Potential savings: **$${totalSaving.toFixed(2)}**`;
+        } else if (aiPrice > dbPrice) {
+          const totalIncrease = (aiPrice - dbPrice) * needed;
+          savingsMarkdown = `\n> ⚠️ **Price Warning:** Market price is higher than your DB. Extra cost: **$${totalIncrease.toFixed(2)}**`;
+        }
+      }
+
       const stockRatio = (
         (product.current_stock / product.min_required) *
         100
       ).toFixed(1);
-      const needed = product.min_required - product.current_stock;
+
+      // Determine the Price Label with Source Icon
+      const priceSourceIcon =
+        product.ai_source === "catalog" ? "✅ (Catalog)" : "🌐 (Market Search)";
+      const priceDisplay = aiPrice
+        ? `$${aiPrice.toFixed(2)} ${priceSourceIcon}`
+        : "*(Not found - using DB price)*";
 
       content += `### ${index + 1}. ${product.name}
-- **Current Stock:** ${product.current_stock}
-- **Minimum Required:** ${product.min_required}
-- **Stock Level:** ${stockRatio}%
+- **Current Stock:** ${product.current_stock} / ${product.min_required} (${stockRatio}%)
+- **Database Price:** $${dbPrice.toFixed(2)}
+- **Market Price (AI):** ${priceDisplay}
+- **Expert Advice:** *${product.ai_advice || "No specific advice found."}*
 - **Need to Order:** ${needed} units
-- **Estimated Cost:** $${(needed * product.cost_price).toFixed(2)}
+- **Estimated Investment:** **$${totalCost.toFixed(2)}** ${savingsMarkdown}
 
 `;
 
@@ -237,38 +334,59 @@ class InventoryAnalyzer {
         content += `**Catalog Information:**
 - **Supplier:** ${product.catalog_data.supplier}
 - **Catalog URL:** ${product.catalog_data.url}
-- **Fetched:** ${product.catalog_data.timestamp}
-- **Data Available:** Yes (${typeof product.catalog_data.data === "object" ? "JSON object" : "raw data"})
+- **Analysis Status:** Verified by Gemini AI
 
 `;
       } else if (product.catalog_error) {
-        content += `**Catalog Status:** ❌ ${product.catalog_error}\n\n`;
-      } else {
-        content += `**Catalog Status:** ⚠️ No suppliers with catalog URLs available\n\n`;
+        content += `**Catalog Status:** ❌ ${product.catalog_error} *(Using AI Market Average instead)*\n\n`;
       }
 
-      content += `**Recommendation:** 
-- Order ${needed} units immediately
-- Contact supplier${product.catalog_data ? ` (${product.catalog_data.supplier})` : ""} for pricing and availability
-- Consider increasing minimum stock level to ${Math.ceil(product.min_required * 1.2)} units
+      content += `**Recommendation:**
+- Order **${needed}** units immediately to reach safety levels.
+- **Action:** ${aiPrice ? `Lock in price of $${aiPrice.toFixed(2)} via ${product.ai_source}` : `Contact supplier for current quote`}.
+- **Safety Margin:** Consider increasing min stock to ${Math.ceil(product.min_required * 1.2)} units.
 
 ---\n\n`;
     });
 
+    // Final calculations for the Summary
+    const totalUnits = products.reduce(
+      (sum, p) => sum + (p.min_required - p.current_stock),
+      0,
+    );
+
+    const grandTotalCost = products.reduce((sum, p) => {
+      const price = p.ai_updated_price
+        ? Number(p.ai_updated_price)
+        : Number(p.cost_price);
+      const qty = p.min_required - p.current_stock;
+      return sum + qty * price;
+    }, 0);
+
+    const totalPotentialSavings = products.reduce((sum, p) => {
+      if (p.ai_updated_price && p.ai_updated_price < p.cost_price) {
+        return (
+          sum +
+          (p.cost_price - p.ai_updated_price) *
+            (p.min_required - p.current_stock)
+        );
+      }
+      return sum;
+    }, 0);
+
     content += `## Summary
 
 **Total Products Needing Reorder:** ${products.length}
-**Total Units Needed:** ${products.reduce((sum, p) => sum + (p.min_required - p.current_stock), 0)}
-**Estimated Total Cost:** $${products.reduce((sum, p) => sum + (p.min_required - p.current_stock) * p.cost_price, 0).toFixed(2)}
+**Total Units Needed:** ${totalUnits}
+**Estimated Total Cost:** $${grandTotalCost.toFixed(2)}
+**Potential Total Savings:** $${totalPotentialSavings.toFixed(2)}
 
 **Next Steps:**
-1. Review each product recommendation above
-2. Contact suppliers for current pricing
-3. Place orders for critical items
-4. Update inventory levels after receiving shipments
-5. Consider adjusting minimum stock requirements for frequently low items
+1. Review AI-verified market prices vs. your database records.
+2. Confirm availability with suppliers before placing orders.
+3. Update local database costs if market prices have shifted permanently.
 
-*Report generated by Inventory Analyzer Script*`;
+*Report generated by AI-Enhanced Inventory Analyzer*`;
 
     return content;
   }

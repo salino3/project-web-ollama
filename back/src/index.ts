@@ -97,7 +97,7 @@ app.get("/api/mcp/fetch-catalog/:supplierId", async (req, res) => {
 // Sales Routes
 app.post("/api/sales", async (req, res) => {
   try {
-    const result = await saleService.createSaleWithTransaction(req.body);
+    const result = await saleService.createMultipleSales(req.body);
     res.status(201).json(result);
   } catch (error) {
     if (error instanceof Error) {

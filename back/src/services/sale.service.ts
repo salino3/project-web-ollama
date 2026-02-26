@@ -2,57 +2,67 @@ import pool from "../database/connection.js";
 import { CreateSaleRequest } from "../models/sale.model.js";
 
 export class SaleService {
-  async createSaleWithTransaction(saleData: CreateSaleRequest): Promise<any> {
+  //*  DB Restriction check_stock_not_negative added
+  async createMultipleSales(saleItems: CreateSaleRequest[]): Promise<any> {
+    if (!saleItems || saleItems.length === 0) {
+      return "There is not sales in the process";
+    }
+
     const client = await pool.connect();
 
     try {
-      // Start transaction
+      // 1. Sort to avoid Deadlocks
+      const sorted = [...saleItems].sort((a, b) => a.product_id - b.product_id);
+      const ids = sorted.map((i) => i.product_id);
+      const qtys = sorted.map((i) => i.quantity);
+      const prices = sorted.map((i) => i.sale_price);
+
+      // 'BEGIN' & 'FOR' & 'COMMIT' or 'ROLLBACK' obliges the secondo sql call to wait for the update of first process
+      // it works on the row matches with id, no all table
+      const atomicQuery = `
+        WITH data AS (
+          SELECT 
+            UNNEST($1::int[]) as id, 
+            UNNEST($2::int[]) as req_qty,
+            UNNEST($3::numeric[]) as price
+        ),
+        updated AS (
+          UPDATE products p
+          SET current_stock = p.current_stock - d.req_qty
+          FROM data d
+          WHERE p.id = d.id
+          RETURNING p.id
+        )
+        INSERT INTO sales (product_id, quantity, sale_price)
+        SELECT d.id, d.req_qty, d.price FROM data d
+        JOIN updated u ON d.id = u.id
+        RETURNING *;
+      `;
+
       await client.query("BEGIN");
 
-      // Check if product exists and has enough stock
-      const product = await client.query(
-        "SELECT id, name, current_stock FROM products WHERE id = $1 FOR UPDATE",
-        [saleData.product_id],
-      );
+      // If stock goes below 0, the DB throws an error here,
+      // jumping straight to the catch/rollback block.
+      const result = await client.query(atomicQuery, [ids, qtys, prices]);
 
-      if (product.rows.length === 0) {
-        throw new Error("Product not found");
-      }
-
-      const currentStock = product.rows[0].current_stock;
-
-      if (currentStock < saleData.quantity) {
+      if (result.rows.length !== saleItems.length) {
         throw new Error(
-          `Insufficient stock. Available: ${currentStock}, Requested: ${saleData.quantity}`,
+          "Transaction failed: One or more Product IDs do not exist.",
         );
       }
 
-      // Update product stock
-      await client.query(
-        "UPDATE products SET current_stock = current_stock - $1 WHERE id = $2",
-        [saleData.quantity, saleData.product_id],
-      );
-
-      // Create sale record
-      const saleResult = await client.query(
-        "INSERT INTO sales (product_id, quantity, sale_price) VALUES ($1, $2, $3) RETURNING *",
-        [saleData.product_id, saleData.quantity, saleData.sale_price],
-      );
-
-      // Commit transaction
       await client.query("COMMIT");
-
-      return {
-        sale: saleResult.rows[0],
-        previous_stock: currentStock,
-        new_stock: currentStock - saleData.quantity,
-      };
-    } catch (error) {
-      // Rollback transaction on error
+      return { success: true, sales: result.rows };
+    } catch (error: any) {
       await client.query("ROLLBACK");
+      // You can customize the error message for the frontend
+      if (error.constraint === "check_stock_not_negative") {
+        throw new Error(
+          "Transaction failed: Insufficient stock for one or more items.",
+        );
+      }
       throw error;
     } finally {
-      // Release client back to pool
       client.release();
     }
   }
