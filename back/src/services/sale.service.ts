@@ -31,6 +31,7 @@ export class SaleService {
         )
         INSERT INTO sales (product_id, quantity, sale_price)
         SELECT d.id, d.req_qty, d.price FROM data d
+        JOIN updated u ON d.id = u.id
         RETURNING *;
       `;
 
@@ -39,6 +40,12 @@ export class SaleService {
       // If stock goes below 0, the DB throws an error here,
       // jumping straight to the catch/rollback block.
       const result = await client.query(atomicQuery, [ids, qtys, prices]);
+
+      if (result.rows.length !== saleItems.length) {
+        throw new Error(
+          "Transaction failed: One or more Product IDs do not exist.",
+        );
+      }
 
       await client.query("COMMIT");
       return { success: true, sales: result.rows };
