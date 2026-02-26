@@ -2,6 +2,7 @@ import { query } from "../database/connection.js";
 import axios from "axios";
 import fs from "fs/promises";
 import path from "path";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 //  npx tsx src/scripts/analyze_inventory.ts
 
 interface Product {
@@ -30,6 +31,10 @@ interface CatalogResponse {
   data: any;
   timestamp: string;
 }
+
+// Configuración de la IA
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+const aiModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
 class InventoryAnalyzer {
   private outputFile: string;
