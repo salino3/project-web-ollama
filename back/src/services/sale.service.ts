@@ -11,6 +11,8 @@ export class SaleService {
 
       // Check if product exists and has enough stock
       const product = await client.query(
+        // 'BEGIN' & 'FOR' & 'COMMIT' or 'ROLLBACK' obliges the secondo sql call to wait for the update of first process
+        // it works on the row matches with id, no all table
         "SELECT id, name, current_stock FROM products WHERE id = $1 FOR UPDATE",
         [saleData.product_id],
       );
