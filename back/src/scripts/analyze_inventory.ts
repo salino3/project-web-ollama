@@ -3,7 +3,15 @@ import axios from "axios";
 import fs from "fs/promises";
 import path from "path";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import dotenv from "dotenv";
 //  npx tsx src/scripts/analyze_inventory.ts
+
+// Load environment variables
+dotenv.config();
+
+// AI Configuration
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+const aiModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
 interface Product {
   id: number;
@@ -23,24 +31,38 @@ interface LowStockProduct extends Product {
   suppliers: Supplier[];
   catalog_data?: any;
   catalog_error?: string;
+  ai_updated_price?: number;
 }
-
-interface CatalogResponse {
-  supplier: string;
-  url: string;
-  data: any;
-  timestamp: string;
-}
-
-// Configuración de la IA
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-const aiModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-
 class InventoryAnalyzer {
   private outputFile: string;
 
   constructor() {
     this.outputFile = path.join(process.cwd(), "REORDER_REPORT.md");
+  }
+
+  private async getPriceWithAI(
+    productName: string,
+    catalogData: any,
+  ): Promise<number | null> {
+    try {
+      const prompt = `
+        Analyze this supplier catalog data and find the CURRENT UNIT PRICE for: "${productName}".
+        Catalog Data: ${JSON.stringify(catalogData).substring(0, 3000)}
+        
+        Return ONLY the numerical price (e.g., 5.50). 
+        If you cannot find it, return "null".
+      `;
+
+      const result = await aiModel.generateContent(prompt);
+      const text = result.response.text().trim();
+
+      // Clean up the response in case AI adds markdown
+      const cleanText = text.replace(/[^0-9.]/g, "");
+      return cleanText !== "" ? parseFloat(cleanText) : null;
+    } catch (e) {
+      console.error(`🤖 AI parsing error for ${productName}:`, e);
+      return null;
+    }
   }
 
   async analyzeInventory(): Promise<void> {
@@ -141,6 +163,7 @@ class InventoryAnalyzer {
         ...product,
         catalog_data: undefined,
         catalog_error: undefined,
+        ai_updated_price: undefined, // Initialize the new field
       };
 
       // Try to fetch catalog data from each supplier
@@ -168,7 +191,28 @@ class InventoryAnalyzer {
             console.log(
               `✅ Successfully fetched catalog for ${product.name} from ${supplier.name}`,
             );
-            break; // Stop after first successful fetch
+
+            // --- AI INTEGRATION START ---
+            // We call the Gemini method here to parse the raw data we just downloaded
+            console.log(
+              `🤖 AI is analyzing the catalog for ${product.name} price...`,
+            );
+            const extractedPrice = await this.getPriceWithAI(
+              product.name,
+              response.data,
+            );
+
+            if (extractedPrice !== null) {
+              productWithCatalog.ai_updated_price = extractedPrice;
+              console.log(`✨ AI found a current price: $${extractedPrice}`);
+            } else {
+              console.log(
+                `ℹ️ AI could not find a specific price for this item in the catalog.`,
+              );
+            }
+            // --- AI INTEGRATION END ---
+
+            break; // Stop after first successful fetch and AI analysis
           } catch (error) {
             const errorMessage =
               error instanceof Error ? error.message : "Unknown error";
@@ -207,7 +251,7 @@ class InventoryAnalyzer {
   ): string {
     const timestamp = new Date().toISOString();
 
-    let content = `# Inventory Reorder Report
+    let content = `# 🤖 Smart Inventory Reorder Report
 
 **Generated:** ${timestamp}
 **Summary:** ${summary}
@@ -223,19 +267,39 @@ class InventoryAnalyzer {
     content += `## Low Stock Products (${products.length})\n\n`;
 
     products.forEach((product, index) => {
+      const dbPrice = Number(product.cost_price);
+      const aiPrice = product.ai_updated_price
+        ? Number(product.ai_updated_price)
+        : null;
+
+      // We prioritize the AI price for the calculation, but fallback to DB
+      const currentPrice = aiPrice || dbPrice;
+      const needed = product.min_required - product.current_stock;
+      const totalCost = needed * currentPrice;
+
+      // Logic for the Savings/Warning badge
+      let savingsMarkdown = "";
+      if (aiPrice) {
+        if (aiPrice < dbPrice) {
+          const totalSaving = (dbPrice - aiPrice) * needed;
+          savingsMarkdown = `\n> 💰 **Saving Opportunity:** AI found a lower price! Potential savings: **$${totalSaving.toFixed(2)}**`;
+        } else if (aiPrice > dbPrice) {
+          const totalIncrease = (aiPrice - dbPrice) * needed;
+          savingsMarkdown = `\n> ⚠️ **Price Warning:** Market price is higher than your DB. Extra cost: **$${totalIncrease.toFixed(2)}**`;
+        }
+      }
+
       const stockRatio = (
         (product.current_stock / product.min_required) *
         100
       ).toFixed(1);
-      const needed = product.min_required - product.current_stock;
 
       content += `### ${index + 1}. ${product.name}
-- **Current Stock:** ${product.current_stock}
-- **Minimum Required:** ${product.min_required}
-- **Stock Level:** ${stockRatio}%
+- **Current Stock:** ${product.current_stock} / ${product.min_required} (${stockRatio}%)
+- **Database Price:** $${dbPrice.toFixed(2)}
+- **Market Price (AI):** ${aiPrice ? `$${aiPrice.toFixed(2)}` : "*(Not found in catalog)*"}
 - **Need to Order:** ${needed} units
-- **Product Cost:** $${product.cost_price} for units
-- **Estimated Total Cost:** $${(needed * product.cost_price).toFixed(2)}
+- **Estimated Investment:** **$${totalCost.toFixed(2)}** ${savingsMarkdown}
 
 `;
 
@@ -243,38 +307,58 @@ class InventoryAnalyzer {
         content += `**Catalog Information:**
 - **Supplier:** ${product.catalog_data.supplier}
 - **Catalog URL:** ${product.catalog_data.url}
-- **Fetched:** ${product.catalog_data.timestamp}
-- **Data Available:** Yes (${typeof product.catalog_data.data === "object" ? "JSON object" : "raw data"})
+- **Data Status:** Analysis verified by Gemini AI
 
 `;
       } else if (product.catalog_error) {
         content += `**Catalog Status:** ❌ ${product.catalog_error}\n\n`;
-      } else {
-        content += `**Catalog Status:** ⚠️ No suppliers with catalog URLs available\n\n`;
       }
 
-      content += `**Recommendation:** 
-- Order ${needed} units immediately
-- Contact supplier${product.catalog_data ? ` (${product.catalog_data.supplier})` : ""} for pricing and availability
+      content += `**Recommendation:** - Order ${needed} units immediately
+- Contact ${product.catalog_data?.supplier || "supplier"} to lock in the price of $${currentPrice.toFixed(2)}
 - Consider increasing minimum stock level to ${Math.ceil(product.min_required * 1.2)} units
 
 ---\n\n`;
     });
 
+    // Final calculations for the Summary
+    const totalUnits = products.reduce(
+      (sum, p) => sum + (p.min_required - p.current_stock),
+      0,
+    );
+
+    const grandTotalCost = products.reduce((sum, p) => {
+      const price = p.ai_updated_price
+        ? Number(p.ai_updated_price)
+        : Number(p.cost_price);
+      const qty = p.min_required - p.current_stock;
+      return sum + qty * price;
+    }, 0);
+
+    const totalPotentialSavings = products.reduce((sum, p) => {
+      if (p.ai_updated_price && p.ai_updated_price < p.cost_price) {
+        return (
+          sum +
+          (p.cost_price - p.ai_updated_price) *
+            (p.min_required - p.current_stock)
+        );
+      }
+      return sum;
+    }, 0);
+
     content += `## Summary
 
 **Total Products Needing Reorder:** ${products.length}
-**Total Units Needed:** ${products.reduce((sum, p) => sum + (p.min_required - p.current_stock), 0)}
-**Estimated Total Cost:** $${products.reduce((sum, p) => sum + (p.min_required - p.current_stock) * p.cost_price, 0).toFixed(2)}
+**Total Units Needed:** ${totalUnits}
+**Estimated Total Cost:** $${grandTotalCost.toFixed(2)}
+**Potential Total Savings:** $${totalPotentialSavings.toFixed(2)}
 
 **Next Steps:**
-1. Review each product recommendation above
-2. Contact suppliers for current pricing
-3. Place orders for critical items
-4. Update inventory levels after receiving shipments
-5. Consider adjusting minimum stock requirements for frequently low items
+1. Review AI-verified market prices vs. your database records.
+2. Confirm availability with suppliers before placing orders.
+3. Update local database costs if market prices have shifted permanently.
 
-*Report generated by Inventory Analyzer Script*`;
+*Report generated by AI-Enhanced Inventory Analyzer*`;
 
     return content;
   }
