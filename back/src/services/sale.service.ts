@@ -4,6 +4,10 @@ import { CreateSaleRequest } from "../models/sale.model.js";
 export class SaleService {
   //*  DB Restriction check_stock_not_negative added
   async createMultipleSales(saleItems: CreateSaleRequest[]): Promise<any> {
+    if (!saleItems || saleItems.length === 0) {
+      return "There is not sales in the process";
+    }
+
     const client = await pool.connect();
 
     try {
