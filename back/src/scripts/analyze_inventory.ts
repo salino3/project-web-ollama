@@ -52,9 +52,13 @@ class InventoryAnalyzer {
   private async getPriceWithAI(
     productName: string,
     catalogData: any,
-  ): Promise<{ price: number | null; advice: string; source: string }> {
+  ): Promise<{
+    price: number | null;
+    advice: string;
+    source: string;
+    url?: string;
+  }> {
     try {
-      // Groq es tan rápido que 1 segundo de sleep suele ser suficiente
       await this.sleep(2000);
 
       const contextSnippet =
@@ -70,29 +74,32 @@ class InventoryAnalyzer {
           CONTEXT: ${contextSnippet}
           
           STRICT RULES:
-          1. Use your internal knowledge to estimate current electronics market rates.
-          2. Output ONLY a raw JSON object. No intro, no outro.
+          1. If CONTEXT is "USE_MARKET_KNOWLEDGE_ONLY", provide a realistic reference URL for purchasing (e.g., Amazon, Mouser, or AliExpress).
+          2. Output ONLY a raw JSON object.
           
           JSON SCHEMA:
           {
             "price": number,
             "source": "market_analysis",
-            "advice": "string"
+            "advice": "string",
+            "purchase_url": "string"
           }`,
           },
         ],
         model: "llama-3.3-70b-versatile",
-        temperature: 0.1, // Low temperature for more precisly answers
-        response_format: { type: "json_object" }, // Groq force the mode JSON
+        temperature: 0.1,
+        response_format: { type: "json_object" },
       });
 
-      const responseText = completion.choices[0]?.message?.content || "";
-      const parsed = JSON.parse(responseText);
+      const parsed = JSON.parse(
+        completion.choices[0]?.message?.content || "{}",
+      );
 
       return {
         price: typeof parsed.price === "number" ? parsed.price : null,
         advice: parsed.advice || "No specific advice.",
         source: parsed.source || "groq_analysis",
+        url: parsed.purchase_url || null,
       };
     } catch (e: any) {
       console.error("Groq logic failed:", e.message);
@@ -203,16 +210,14 @@ class InventoryAnalyzer {
 
       for (const supplier of product.suppliers) {
         try {
-          console.log(`🌐 Fetching ${product.name} from ${supplier.name}...`);
+          const isUselessLink = supplier.catalog_url.includes("github.com");
           const response = await axios.get(supplier.catalog_url, {
             timeout: 10000,
           });
 
-          const isUselessLink = supplier.catalog_url.includes("github.com");
-
           const aiResult = await this.getPriceWithAI(
             product.name,
-            isUselessLink ? "CATALOG_UNAVAILABLE_USE_SEARCH" : response.data,
+            isUselessLink ? "USE_MARKET_KNOWLEDGE_ONLY" : response.data,
           );
 
           productWithCatalog.ai_advice = aiResult.advice;
@@ -221,20 +226,20 @@ class InventoryAnalyzer {
           if (aiResult.price !== null) {
             productWithCatalog.ai_updated_price = aiResult.price;
             productWithCatalog.catalog_data = {
-              supplier: supplier.name,
-              url: supplier.catalog_url,
+              supplier: isUselessLink ? "Market Suggestion" : supplier.name,
+              url: isUselessLink
+                ? aiResult.url || supplier.catalog_url
+                : supplier.catalog_url,
             };
             foundPrice = true;
-            break; // We found a real price, stop looking
+            break;
           }
         } catch (error) {
           productWithCatalog.catalog_error = "Catalog unreachable";
         }
       }
 
-      // --- THE FIX: If no price was found in any catalog, get MARKET ADVICE ---
       if (!foundPrice) {
-        console.log(`🤖 Using Market Knowledge for ${product.name}...`);
         const marketKnowledge = await this.getPriceWithAI(
           product.name,
           "USE_MARKET_KNOWLEDGE_ONLY",
@@ -243,8 +248,14 @@ class InventoryAnalyzer {
         productWithCatalog.ai_source = "market_average";
         productWithCatalog.ai_updated_price =
           marketKnowledge.price ?? undefined;
+        productWithCatalog.catalog_data = {
+          supplier: "AI Market Recommendation",
+          url:
+            marketKnowledge.url ||
+            "https://www.google.com/search?q=" +
+              encodeURIComponent(product.name),
+        };
       }
-
       results.push(productWithCatalog);
     }
     return results;
