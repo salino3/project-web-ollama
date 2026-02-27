@@ -2,7 +2,8 @@ import { query } from "../database/connection.js";
 import axios from "axios";
 import fs from "fs/promises";
 import path from "path";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+// import { GoogleGenerativeAI } from "@google/generative-ai";
+import Groq from "groq-sdk";
 import dotenv from "dotenv";
 //  npx tsx src/scripts/analyze_inventory.ts
 
@@ -10,8 +11,11 @@ import dotenv from "dotenv";
 dotenv.config();
 
 // AI Configuration
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-const aiModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+const groq = new Groq({
+  apiKey: process.env.AI_API_KEY,
+});
+// const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+// const aiModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
 interface Product {
   id: number;
@@ -50,55 +54,51 @@ class InventoryAnalyzer {
     catalogData: any,
   ): Promise<{ price: number | null; advice: string; source: string }> {
     try {
-      await this.sleep(5000);
-
-      const modelWithSearch = genAI.getGenerativeModel({
-        model: "gemini-2.0-flash",
-      });
+      // Groq es tan rápido que 1 segundo de sleep suele ser suficiente
+      await this.sleep(2000);
 
       const contextSnippet =
         typeof catalogData === "string"
-          ? catalogData.substring(0, 200)
-          : JSON.stringify(catalogData).substring(0, 200);
+          ? catalogData.substring(0, 500)
+          : JSON.stringify(catalogData).substring(0, 500);
 
-      const prompt = `
-        TASK: Research 2026 price and tech tip for: "${productName}".
-        CONTEXT: ${contextSnippet}
-        
-        OUTPUT FORMAT:
-        You must include a JSON object in your response with this exact structure:
-        {
-          "price": number,
-          "source": "online_search",
-          "advice": "string"
-        }
-      `;
-
-      const result = await modelWithSearch.generateContent({
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        tools: [{ googleSearchRetrieval: {} } as any],
+      const completion = await groq.chat.completions.create({
+        messages: [
+          {
+            role: "user",
+            content: `TASK: Research 2026 market price and tech tip for: "${productName}".
+          CONTEXT: ${contextSnippet}
+          
+          STRICT RULES:
+          1. Use your internal knowledge to estimate current electronics market rates.
+          2. Output ONLY a raw JSON object. No intro, no outro.
+          
+          JSON SCHEMA:
+          {
+            "price": number,
+            "source": "market_analysis",
+            "advice": "string"
+          }`,
+          },
+        ],
+        model: "llama-3.3-70b-versatile",
+        temperature: 0.1, // Low temperature for more precisly answers
+        response_format: { type: "json_object" }, // Groq force the mode JSON
       });
 
-      const responseText = result.response.text();
+      const responseText = completion.choices[0]?.message?.content || "";
+      const parsed = JSON.parse(responseText);
 
-      const jsonRegex = /\{[\s\S]*\}/;
-      const match = responseText.match(jsonRegex);
-
-      if (match) {
-        const parsed = JSON.parse(match[0].trim());
-        return {
-          price: typeof parsed.price === "number" ? parsed.price : null,
-          advice: parsed.advice || "No specific advice.",
-          source: parsed.source || "ai_search",
-        };
-      }
-
-      throw new Error("No JSON found in AI response");
+      return {
+        price: typeof parsed.price === "number" ? parsed.price : null,
+        advice: parsed.advice || "No specific advice.",
+        source: parsed.source || "groq_analysis",
+      };
     } catch (e: any) {
-      console.error("AI logic failed:", e.message);
+      console.error("Groq logic failed:", e.message);
       return {
         price: null,
-        advice: "Manual review needed due to API limits or format error.",
+        advice: "Manual review required.",
         source: "error_fallback",
       };
     }
