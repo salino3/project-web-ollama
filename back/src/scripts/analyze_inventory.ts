@@ -47,6 +47,30 @@ class InventoryAnalyzer {
     this.outputFile = path.join(process.cwd(), "REORDER_REPORT.md");
   }
 
+  // TODO: implement it
+  private async scrapeLinkWithSerper(url: string): Promise<string> {
+    const apiKey = process.env.AI_API_KEY_02;
+    try {
+      const response = await axios.post(
+        "https://scrape.serper.dev",
+        { url: url },
+        {
+          headers: {
+            "X-API-KEY": apiKey,
+            "Content-Type": "application/json",
+          },
+          timeout: 10000,
+        },
+      );
+
+      // Serper devuelve el contenido de la web ya procesado
+      return response.data.text || "No content found on page.";
+    } catch (error: any) {
+      console.error(`❌ Serper Scrape failed for ${url}:`, error.message);
+      return "SCRAPE_FAILED";
+    }
+  }
+
   //#region - Serper - start
   private async searchWeb(productQuery: string): Promise<string> {
     const apiKey = process.env.AI_API_KEY_02;
