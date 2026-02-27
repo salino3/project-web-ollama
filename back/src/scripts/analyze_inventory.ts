@@ -50,7 +50,7 @@ class InventoryAnalyzer {
     catalogData: any,
   ): Promise<{ price: number | null; advice: string; source: string }> {
     try {
-      await this.sleep(2000);
+      await this.sleep(5000);
 
       const modelWithSearch = genAI.getGenerativeModel({
         model: "gemini-2.0-flash",
@@ -58,8 +58,8 @@ class InventoryAnalyzer {
 
       const contextSnippet =
         typeof catalogData === "string"
-          ? catalogData.substring(0, 500)
-          : JSON.stringify(catalogData).substring(0, 500);
+          ? catalogData.substring(0, 200)
+          : JSON.stringify(catalogData).substring(0, 200);
 
       const prompt = `
         TASK: Research 2026 price and tech tip for: "${productName}".
