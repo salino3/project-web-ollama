@@ -112,9 +112,7 @@ class InventoryAnalyzer {
         catalogData === "USE_MARKET_KNOWLEDGE_ONLY" ||
         catalogData === "CATALOG_UNAVAILABLE_USE_SEARCH"
       ) {
-        console.log(
-          `🔍 Intentando búsqueda real en Google para: ${productName}...`,
-        );
+        console.log(`🔍 Trying real search on Google for: ${productName}...`);
         webResults = await this.searchWeb(productName);
       }
 
@@ -307,15 +305,14 @@ class InventoryAnalyzer {
           "USE_MARKET_KNOWLEDGE_ONLY",
         );
         productWithCatalog.ai_advice = marketKnowledge.advice;
-        productWithCatalog.ai_source = "market_average";
+
+        productWithCatalog.ai_source = "google_serper_search";
+
         productWithCatalog.ai_updated_price =
           marketKnowledge.price ?? undefined;
         productWithCatalog.catalog_data = {
-          supplier: "AI Market Recommendation",
-          url:
-            marketKnowledge.url ||
-            "https://www.google.com/search?q=" +
-              encodeURIComponent(product.name),
+          supplier: "Google Search Result",
+          url: marketKnowledge.url || "...",
         };
       }
       results.push(productWithCatalog);
