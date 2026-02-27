@@ -1,4 +1,4 @@
-import express from "express";
+import express, { Request, Response } from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { ProductService } from "./services/product.service.js";
@@ -59,6 +59,16 @@ app.get("/api/suppliers", async (req, res) => {
     res.json(suppliers);
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch suppliers" });
+  }
+});
+
+app.post("/api/suppliers", async (req: Request, res: Response) => {
+  const { name, catalog_url } = req.body;
+  try {
+    const suppliers = await supplierRepository.create({ name, catalog_url });
+    res.json(suppliers);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to add supplier" });
   }
 });
 
