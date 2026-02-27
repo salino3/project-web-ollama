@@ -17,6 +17,7 @@ const groq = new Groq({
 // const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 // const aiModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
+//
 interface Product {
   id: number;
   name: string;
@@ -46,6 +47,51 @@ class InventoryAnalyzer {
     this.outputFile = path.join(process.cwd(), "REORDER_REPORT.md");
   }
 
+  //#region - Serper - start
+  private async searchWeb(productQuery: string): Promise<string> {
+    const apiKey = process.env.AI_API_KEY_02;
+
+    if (!apiKey) {
+      console.error("❌ Serper API Key is missing in .env (AI_API_KEY_02)");
+      return "No search key provided.";
+    }
+
+    try {
+      const response = await axios.post(
+        "https://google.serper.dev/search",
+        {
+          q: `${productQuery} price 2026 electronics store`,
+          num: 3,
+        },
+        {
+          headers: {
+            "X-API-KEY": apiKey,
+            "Content-Type": "application/json",
+          },
+          timeout: 5000,
+        },
+      );
+
+      if (!response.data.organic || response.data.organic.length === 0) {
+        return "No organic search results found.";
+      }
+
+      return response.data.organic
+        .slice(0, 3)
+        .map(
+          (result: any) => `Source: ${result.link} | Info: ${result.snippet}`,
+        )
+        .join("\n");
+    } catch (error: any) {
+      const status = error.response?.status;
+      const message = error.response?.data?.message || error.message;
+      console.error(`⚠️ Serper Error [${status}]: ${message}`);
+      return "Search failed due to API connection issue.";
+    }
+  }
+
+  //#endregion - Serper - end
+
   private sleep = (ms: number) =>
     new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -61,6 +107,17 @@ class InventoryAnalyzer {
     try {
       await this.sleep(2000);
 
+      let webResults = "";
+      if (
+        catalogData === "USE_MARKET_KNOWLEDGE_ONLY" ||
+        catalogData === "CATALOG_UNAVAILABLE_USE_SEARCH"
+      ) {
+        console.log(
+          `🔍 Intentando búsqueda real en Google para: ${productName}...`,
+        );
+        webResults = await this.searchWeb(productName);
+      }
+
       const contextSnippet =
         typeof catalogData === "string"
           ? catalogData.substring(0, 500)
@@ -71,16 +128,21 @@ class InventoryAnalyzer {
           {
             role: "user",
             content: `TASK: Research 2026 market price and tech tip for: "${productName}".
-          CONTEXT: ${contextSnippet}
+          
+          CONTEXT FROM LOCAL CATALOG: ${contextSnippet}
+          
+          REAL-TIME WEB SEARCH RESULTS: 
+          ${webResults}
           
           STRICT RULES:
-          1. If CONTEXT is "USE_MARKET_KNOWLEDGE_ONLY", provide a realistic reference URL for purchasing (e.g., Amazon, Mouser, or AliExpress).
-          2. Output ONLY a raw JSON object.
+          1. Use the WEB SEARCH RESULTS to find the current price and a valid purchase URL.
+          2. If WEB SEARCH RESULTS are empty, use your internal knowledge.
+          3. Output ONLY a raw JSON object.
           
           JSON SCHEMA:
           {
             "price": number,
-            "source": "market_analysis",
+            "source": "verified_market_search",
             "advice": "string",
             "purchase_url": "string"
           }`,
@@ -345,7 +407,7 @@ class InventoryAnalyzer {
         content += `**Catalog Information:**
 - **Supplier:** ${product.catalog_data.supplier}
 - **Catalog URL:** ${product.catalog_data.url}
-- **Analysis Status:** Verified by Gemini AI
+- **Analysis Status:** Verified by AI
 
 `;
       } else if (product.catalog_error) {
