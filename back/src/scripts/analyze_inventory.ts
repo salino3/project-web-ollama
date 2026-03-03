@@ -42,7 +42,7 @@ interface LowStockProduct extends Product {
 }
 class InventoryAnalyzer {
   private outputFile: string;
-
+  private deadLinks: Set<string> = new Set();
   constructor() {
     this.outputFile = path.join(process.cwd(), "REORDER_REPORT.md");
   }
@@ -149,17 +149,15 @@ class InventoryAnalyzer {
         messages: [
           {
             role: "user",
-            content: `TASK: Research 2026 market price and tech tip for: "${productName}".
+            content: `TASK: Extract market price for: "${productName}".
           
-          CONTEXT FROM LOCAL CATALOG: ${contextSnippet}
+          CONTEXT FROM PAGE: ${contextSnippet}
+          WEB SEARCH DATA: ${webResults}
           
-          REAL-TIME WEB SEARCH RESULTS: 
-          ${webResults}
-          
-          STRICT RULES:
-          1. Use the WEB SEARCH RESULTS to find the current price and a valid purchase URL.
-          2. If WEB SEARCH RESULTS are empty, use your internal knowledge.
-          3. Output ONLY a raw JSON object.
+       STRICT VALIDATION RULES:
+          1. Check the CONTEXT: If it contains "Access Denied", "Captcha", "404 Not Found", or is a generic search list NOT showing a specific price for "${productName}", set "price": null.
+          2. If the price is found but the currency is not USD, convert it or set null if unsure.
+         3. "advice" should be a 1-sentence technical tip for an electronics engineer.
           
           JSON SCHEMA:
           {
@@ -292,53 +290,111 @@ class InventoryAnalyzer {
       let productWithCatalog: LowStockProduct = { ...product };
       let foundPrice = false;
 
+      // Iterate through each supplier linked to the product in the DB
+      // Inside fetchCatalogData loop
       for (const supplier of product.suppliers) {
-        try {
-          const isUselessLink = supplier.catalog_url.includes("github.com");
-          const response = await axios.get(supplier.catalog_url, {
-            timeout: 10000,
-          });
-
-          const aiResult = await this.getPriceWithAI(
-            product.name,
-            isUselessLink ? "USE_MARKET_KNOWLEDGE_ONLY" : response.data,
+        // 0. CHECK BLACKLIST: Skip if we already know this URL is dead/useless
+        if (this.deadLinks.has(supplier.catalog_url)) {
+          console.log(
+            `⏩ Skipping blacklisted URL for ${product.name}: ${supplier.catalog_url}`,
           );
+          continue;
+        }
 
-          productWithCatalog.ai_advice = aiResult.advice;
-          productWithCatalog.ai_source = aiResult.source;
+        try {
+          console.log(`📡 Attempting direct access for: ${supplier.name}...`);
 
-          if (aiResult.price !== null) {
-            productWithCatalog.ai_updated_price = aiResult.price;
-            productWithCatalog.catalog_data = {
-              supplier: isUselessLink ? "Market Suggestion" : supplier.name,
-              url: isUselessLink
-                ? aiResult.url || supplier.catalog_url
-                : supplier.catalog_url,
-            };
-            foundPrice = true;
-            break;
+          let pageContent = "";
+
+          // Step A: Initial attempt using standard Axios
+          try {
+            const response = await axios.get(supplier.catalog_url, {
+              timeout: 8000,
+              headers: {
+                "User-Agent":
+                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+              },
+            });
+            pageContent = response.data;
+          } catch (axiosError: any) {
+            console.warn(
+              `⚠️ Direct access failed for ${supplier.name}: ${axiosError.message}`,
+            );
+            // Don't blacklist yet, we still have Serper Scrape as a backup
+          }
+
+          // Step B: If Axios failed or returned a likely bot-block (very short HTML)
+          if (!pageContent || pageContent.length < 600) {
+            console.log(
+              `🛡️ Content blocked or empty. Retrying with Serper Scrape for ${supplier.name}...`,
+            );
+            pageContent = await this.scrapeLinkWithSerper(supplier.catalog_url);
+          }
+
+          // Step C: Ask AI to validate and extract
+          if (pageContent && pageContent !== "SCRAPE_FAILED") {
+            const aiResult = await this.getPriceWithAI(
+              product.name,
+              pageContent,
+            );
+
+            // If the AI finds a valid price
+            if (aiResult.price !== null) {
+              productWithCatalog.ai_advice = aiResult.advice;
+              productWithCatalog.ai_updated_price = aiResult.price;
+              productWithCatalog.ai_source = "database_catalog_link";
+
+              productWithCatalog.catalog_data = {
+                supplier: supplier.name,
+                url: supplier.catalog_url,
+              };
+              foundPrice = true;
+              break; // SUCCESS: move to next product
+            } else {
+              // AI found the page but determined it was junk (Access Denied, Wrong Product, etc.)
+              console.log(
+                `❌ AI rejected content from ${supplier.name}. Blacklisting URL.`,
+              );
+              this.deadLinks.add(supplier.catalog_url);
+            }
+          } else {
+            // Both Axios and Serper Scrape failed
+            console.log(
+              `🚫 Link completely unreachable. Blacklisting URL: ${supplier.catalog_url}`,
+            );
+            this.deadLinks.add(supplier.catalog_url);
           }
         } catch (error) {
-          productWithCatalog.catalog_error = "Catalog unreachable";
+          console.error(
+            `⚠️ Fatal Error processing supplier ${supplier.name}:`,
+            error,
+          );
+          // Blacklist on fatal error to avoid repeating the crash
+          this.deadLinks.add(supplier.catalog_url);
         }
       }
 
+      // Step D: Fallback - If no DB links worked, perform a fresh Google Search
       if (!foundPrice) {
-        const marketKnowledge = await this.getPriceWithAI(
-          product.name,
-          "USE_MARKET_KNOWLEDGE_ONLY",
+        console.log(
+          `🔍 No valid price in DB for ${product.name}. Triggering Google Search...`,
         );
-        productWithCatalog.ai_advice = marketKnowledge.advice;
+        const marketResult = await this.getPriceWithAI(
+          product.name,
+          "CATALOG_UNAVAILABLE_USE_SEARCH",
+        );
 
+        productWithCatalog.ai_advice = marketResult.advice;
         productWithCatalog.ai_source = "google_serper_search";
-
-        productWithCatalog.ai_updated_price =
-          marketKnowledge.price ?? undefined;
+        productWithCatalog.ai_updated_price = marketResult.price ?? undefined;
         productWithCatalog.catalog_data = {
-          supplier: "Google Search Result",
-          url: marketKnowledge.url || "...",
+          supplier: "AI Market Search",
+          url:
+            marketResult.url ||
+            `https://www.google.com/search?q=${encodeURIComponent(product.name)}`,
         };
       }
+
       results.push(productWithCatalog);
     }
     return results;
@@ -407,9 +463,17 @@ class InventoryAnalyzer {
         100
       ).toFixed(1);
 
-      // Determine the Price Label with Source Icon
-      const priceSourceIcon =
-        product.ai_source === "catalog" ? "✅ (Catalog)" : "🌐 (Market Search)";
+      // Determine the Price Label with Source Icon based on the new dynamic sources
+      let priceSourceIcon = "🔍 (Unknown)";
+
+      if (product.ai_source === "database_catalog_link") {
+        priceSourceIcon = "✅ (Verified DB Link)";
+      } else if (product.ai_source === "google_serper_search") {
+        priceSourceIcon = "🌐 (Global Market Search)";
+      } else if (product.ai_source === "catalog") {
+        priceSourceIcon = "📦 (Local Catalog)";
+      }
+
       const priceDisplay = aiPrice
         ? `$${aiPrice.toFixed(2)} ${priceSourceIcon}`
         : "*(Not found - using DB price)*";
