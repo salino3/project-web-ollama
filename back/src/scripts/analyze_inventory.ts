@@ -17,6 +17,7 @@ const groq = new Groq({
 // const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 // const aiModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
+//
 interface Product {
   id: number;
   name: string;
@@ -46,6 +47,51 @@ class InventoryAnalyzer {
     this.outputFile = path.join(process.cwd(), "REORDER_REPORT.md");
   }
 
+  //#region - Serper - start
+  private async searchWeb(productQuery: string): Promise<string> {
+    const apiKey = process.env.AI_API_KEY_02;
+
+    if (!apiKey) {
+      console.error("❌ Serper API Key is missing in .env (AI_API_KEY_02)");
+      return "No search key provided.";
+    }
+
+    try {
+      const response = await axios.post(
+        "https://google.serper.dev/search",
+        {
+          q: `${productQuery} price 2026 electronics store`,
+          num: 3,
+        },
+        {
+          headers: {
+            "X-API-KEY": apiKey,
+            "Content-Type": "application/json",
+          },
+          timeout: 5000,
+        },
+      );
+
+      if (!response.data.organic || response.data.organic.length === 0) {
+        return "No organic search results found.";
+      }
+
+      return response.data.organic
+        .slice(0, 3)
+        .map(
+          (result: any) => `Source: ${result.link} | Info: ${result.snippet}`,
+        )
+        .join("\n");
+    } catch (error: any) {
+      const status = error.response?.status;
+      const message = error.response?.data?.message || error.message;
+      console.error(`⚠️ Serper Error [${status}]: ${message}`);
+      return "Search failed due to API connection issue.";
+    }
+  }
+
+  //#endregion - Serper - end
+
   private sleep = (ms: number) =>
     new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -61,6 +107,15 @@ class InventoryAnalyzer {
     try {
       await this.sleep(2000);
 
+      let webResults = "";
+      if (
+        catalogData === "USE_MARKET_KNOWLEDGE_ONLY" ||
+        catalogData === "CATALOG_UNAVAILABLE_USE_SEARCH"
+      ) {
+        console.log(`🔍 Trying real search on Google for: ${productName}...`);
+        webResults = await this.searchWeb(productName);
+      }
+
       const contextSnippet =
         typeof catalogData === "string"
           ? catalogData.substring(0, 500)
@@ -70,17 +125,20 @@ class InventoryAnalyzer {
         messages: [
           {
             role: "user",
-            content: `TASK: Research 2026 market price and tech tip for: "${productName}".
-          CONTEXT: ${contextSnippet}
+            content: `TASK: Extract market price for: "${productName}".
           
-          STRICT RULES:
-          1. If CONTEXT is "USE_MARKET_KNOWLEDGE_ONLY", provide a realistic reference URL for purchasing (e.g., Amazon, Mouser, or AliExpress).
-          2. Output ONLY a raw JSON object.
+          CONTEXT FROM PAGE: ${contextSnippet}
+          WEB SEARCH DATA: ${webResults}
+          
+       STRICT VALIDATION RULES:
+          1. Check the CONTEXT: If it contains "Access Denied", "Captcha", "404 Not Found", or is a generic search list NOT showing a specific price for "${productName}", set "price": null.
+          2. If the price is found but the currency is not USD, convert it or set null if unsure.
+         3. "advice" should be a 1-sentence technical tip for an electronics engineer.
           
           JSON SCHEMA:
           {
             "price": number,
-            "source": "market_analysis",
+            "source": "verified_market_search",
             "advice": "string",
             "purchase_url": "string"
           }`,
@@ -206,56 +264,44 @@ class InventoryAnalyzer {
 
     for (const product of products) {
       let productWithCatalog: LowStockProduct = { ...product };
-      let foundPrice = false;
+      const dbPrice = Number(product.cost_price);
 
-      for (const supplier of product.suppliers) {
-        try {
-          const isUselessLink = supplier.catalog_url.includes("github.com");
-          const response = await axios.get(supplier.catalog_url, {
-            timeout: 10000,
-          });
+      console.log(`\n🌍 Auditing Market for: ${product.name}...`);
 
-          const aiResult = await this.getPriceWithAI(
-            product.name,
-            isUselessLink ? "USE_MARKET_KNOWLEDGE_ONLY" : response.data,
-          );
+      // STEP 1: Always perform a fresh Google Search
+      const marketResult = await this.getPriceWithAI(
+        product.name,
+        "USE_MARKET_KNOWLEDGE_ONLY", // This forces the searchWeb() trigger
+      );
 
-          productWithCatalog.ai_advice = aiResult.advice;
-          productWithCatalog.ai_source = aiResult.source;
+      const marketPrice = marketResult.price;
 
-          if (aiResult.price !== null) {
-            productWithCatalog.ai_updated_price = aiResult.price;
-            productWithCatalog.catalog_data = {
-              supplier: isUselessLink ? "Market Suggestion" : supplier.name,
-              url: isUselessLink
-                ? aiResult.url || supplier.catalog_url
-                : supplier.catalog_url,
-            };
-            foundPrice = true;
-            break;
-          }
-        } catch (error) {
-          productWithCatalog.catalog_error = "Catalog unreachable";
+      // STEP 2: Logic - Compare and Advise
+      if (marketPrice !== null) {
+        productWithCatalog.ai_updated_price = marketPrice;
+        productWithCatalog.ai_source = "google_serper_search";
+
+        // Custom Advice based on the price gap
+        if (marketPrice < dbPrice) {
+          productWithCatalog.ai_advice = `💰 BETTER PRICE FOUND: $${marketPrice.toFixed(2)} (Save $${(dbPrice - marketPrice).toFixed(2)} per unit). ${marketResult.advice}`;
+        } else {
+          productWithCatalog.ai_advice = `✅ DB PRICE IS COMPETITIVE: Market is $${marketPrice.toFixed(2)}. Your current source ($${dbPrice.toFixed(2)}) is better. ${marketResult.advice}`;
         }
+
+        // Use the URL the AI found in the search results
+        productWithCatalog.catalog_data = {
+          supplier: "AI Market Discovery",
+          url:
+            marketResult.url ||
+            `https://www.google.com/search?q=${encodeURIComponent(product.name)}`,
+        };
+      } else {
+        // Fallback if search fails to find a price
+        productWithCatalog.ai_advice =
+          "⚠️ Market search could not find a clear price. Proceed with caution.";
+        productWithCatalog.ai_updated_price = dbPrice;
       }
 
-      if (!foundPrice) {
-        const marketKnowledge = await this.getPriceWithAI(
-          product.name,
-          "USE_MARKET_KNOWLEDGE_ONLY",
-        );
-        productWithCatalog.ai_advice = marketKnowledge.advice;
-        productWithCatalog.ai_source = "market_average";
-        productWithCatalog.ai_updated_price =
-          marketKnowledge.price ?? undefined;
-        productWithCatalog.catalog_data = {
-          supplier: "AI Market Recommendation",
-          url:
-            marketKnowledge.url ||
-            "https://www.google.com/search?q=" +
-              encodeURIComponent(product.name),
-        };
-      }
       results.push(productWithCatalog);
     }
     return results;
@@ -324,9 +370,17 @@ class InventoryAnalyzer {
         100
       ).toFixed(1);
 
-      // Determine the Price Label with Source Icon
-      const priceSourceIcon =
-        product.ai_source === "catalog" ? "✅ (Catalog)" : "🌐 (Market Search)";
+      // Determine the Price Label with Source Icon based on the new dynamic sources
+      let priceSourceIcon = "🔍 (Unknown)";
+
+      if (product.ai_source === "database_catalog_link") {
+        priceSourceIcon = "✅ (Verified DB Link)";
+      } else if (product.ai_source === "google_serper_search") {
+        priceSourceIcon = "🌐 (Global Market Search)";
+      } else if (product.ai_source === "catalog") {
+        priceSourceIcon = "📦 (Local Catalog)";
+      }
+
       const priceDisplay = aiPrice
         ? `$${aiPrice.toFixed(2)} ${priceSourceIcon}`
         : "*(Not found - using DB price)*";
@@ -345,7 +399,7 @@ class InventoryAnalyzer {
         content += `**Catalog Information:**
 - **Supplier:** ${product.catalog_data.supplier}
 - **Catalog URL:** ${product.catalog_data.url}
-- **Analysis Status:** Verified by Gemini AI
+- **Analysis Status:** Verified by AI
 
 `;
       } else if (product.catalog_error) {
